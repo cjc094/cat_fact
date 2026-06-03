@@ -20,6 +20,7 @@ final supabase = Supabase.instance.client;
 
 const catFactBaseUrl = 'https://catfact.ninja';
 const factCategories = ['可愛', '健康', '行為', '冷知識'];
+const userCategoryTable = 'cat_fact_categories';
 const catAiFunctionUrl =
     'https://qbfxeedidjcgjevoygne.supabase.co/functions/v1/cat-ai';
 
@@ -52,6 +53,74 @@ Widget buildLottieAsset(
           );
     },
   );
+}
+
+Future<List<String>> loadUserCategoriesFromSupabase() async {
+  final user = supabase.auth.currentUser;
+  final categorySet = <String>{...factCategories};
+
+  if (user == null) return categorySet.toList();
+
+  try {
+    final data = await supabase
+        .from(userCategoryTable)
+        .select('name')
+        .eq('user_id', user.id)
+        .order('name');
+
+    for (final item in data) {
+      final name = item['name']?.toString().trim();
+      if (name != null && name.isNotEmpty) {
+        categorySet.add(name);
+      }
+    }
+  } catch (_) {
+    // 如果 Supabase 尚未建立分類表，先保留預設分類，避免 App 直接閃退。
+  }
+
+  return categorySet.toList();
+}
+
+Future<void> saveUserCategoryToSupabase(String name) async {
+  final user = supabase.auth.currentUser;
+  final cleanName = name.trim();
+
+  if (user == null || cleanName.isEmpty || factCategories.contains(cleanName)) {
+    return;
+  }
+
+  await supabase.from(userCategoryTable).upsert({
+    'user_id': user.id,
+    'name': cleanName,
+  }, onConflict: 'user_id,name');
+}
+
+Future<void> deleteUserCategoryFromSupabase(String name) async {
+  final user = supabase.auth.currentUser;
+  final cleanName = name.trim();
+
+  if (user == null || cleanName.isEmpty || factCategories.contains(cleanName)) {
+    return;
+  }
+
+  await supabase
+      .from('cat_fact_favorites')
+      .update({'category': '冷知識'})
+      .eq('user_id', user.id)
+      .eq('category', cleanName);
+
+  // 再把自己新增 / 喵博士收藏產生的 cat_facts 分類也改回「冷知識」
+  await supabase
+      .from('cat_facts')
+      .update({'category': '冷知識'})
+      .eq('created_by', user.id)
+      .eq('category', cleanName);
+
+  await supabase
+      .from(userCategoryTable)
+      .delete()
+      .eq('user_id', user.id)
+      .eq('name', cleanName);
 }
 
 class CatFact {
@@ -600,7 +669,7 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      body: pages[selectedIndex],
+      body: IndexedStack(index: selectedIndex, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedIndex,
         onDestinationSelected: (index) {
@@ -654,14 +723,23 @@ class _DiscoverPageState extends State<DiscoverPage> {
   final Set<String> favoriteApiFactIds = {};
   final Map<String, String> favoriteApiFactCategories = {};
   final Set<String> savingFavoriteFactIds = {};
-  final List<String> categories = [...factCategories];
+  List<String> categories = [...factCategories];
 
   @override
   void initState() {
     super.initState();
+    loadCategories();
     loadFavoriteApiFactIds();
     loadDailyFact();
     loadRandomList();
+  }
+
+  Future<void> loadCategories() async {
+    final loadedCategories = await loadUserCategoriesFromSupabase();
+    if (!mounted) return;
+    setState(() {
+      categories = loadedCategories;
+    });
   }
 
   String getDailyFactKey() {
@@ -1043,12 +1121,39 @@ class _DiscoverPageState extends State<DiscoverPage> {
       },
     );
 
-    controller.dispose();
     return result;
+  }
+
+  bool isDefaultCategory(String category) {
+    return factCategories.contains(category);
+  }
+
+  Future<void> deleteCustomCategory(String category) async {
+    if (isDefaultCategory(category)) {
+      showMessage('預設分類不能刪除');
+      return;
+    }
+
+    try {
+      await deleteUserCategoryFromSupabase(category);
+    } catch (e) {
+      showMessage('刪除分類失敗：$e');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      categories.remove(category);
+    });
+
+    showMessage('已刪除分類：$category');
   }
 
   Future<void> openCategoryPicker(CatFact fact) async {
     if (savingFavoriteFactIds.contains(fact.id)) return;
+
+    await loadCategories();
+    if (!mounted) return;
     final category = await showModalBottomSheet<String>(
       context: context,
       builder: (context) {
@@ -1061,6 +1166,16 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 ListTile(
                   leading: const Icon(Icons.label_outline),
                   title: Text(category),
+                  trailing: isDefaultCategory(category)
+                      ? null
+                      : IconButton(
+                          tooltip: '刪除此分類',
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            deleteCustomCategory(category);
+                          },
+                        ),
                   onTap: () => Navigator.pop(context, category),
                 ),
               const Divider(height: 1),
@@ -1080,6 +1195,13 @@ class _DiscoverPageState extends State<DiscoverPage> {
     if (category == '__add_category__') {
       final newCategory = await showAddCategoryDialog();
       if (newCategory == null || newCategory.isEmpty) return;
+
+      try {
+        await saveUserCategoryToSupabase(newCategory);
+      } catch (e) {
+        showMessage('分類儲存失敗：$e');
+        return;
+      }
 
       if (!categories.contains(newCategory)) {
         setState(() {
@@ -1286,6 +1408,20 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
   final Map<String, String> translatedFavorites = {};
   final Set<String> translatingFavoriteIds = {};
 
+  @override
+  void initState() {
+    super.initState();
+    loadCategories();
+  }
+
+  Future<void> loadCategories() async {
+    final loadedCategories = await loadUserCategoriesFromSupabase();
+    if (!mounted) return;
+    setState(() {
+      availableCategories = ['全部', ...loadedCategories];
+    });
+  }
+
   Future<List<Map<String, dynamic>>> fetchFavorites() async {
     final user = supabase.auth.currentUser;
     if (user == null) return [];
@@ -1302,7 +1438,11 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     final data = await query.order('created_at', ascending: false);
     final favorites = List<Map<String, dynamic>>.from(data);
 
-    final categorySet = <String>{'全部', ...factCategories};
+    final categorySet = <String>{
+      ...availableCategories,
+      '全部',
+      ...factCategories,
+    };
     for (final item in favorites) {
       final category = item['category']?.toString();
       if (category != null && category.isNotEmpty) {
@@ -1317,6 +1457,60 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
   Future<void> removeFavorite(String favoriteId) async {
     await supabase.from('cat_fact_favorites').delete().eq('id', favoriteId);
     setState(() {});
+  }
+
+  bool isDefaultCategory(String category) {
+    return category == '全部' || factCategories.contains(category);
+  }
+
+  Future<void> deleteCustomFavoriteCategory(String category) async {
+    if (isDefaultCategory(category)) {
+      return;
+    }
+
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('刪除分類'),
+          content: Text('確定要刪除「$category」這個分類嗎？\n收藏內容不會被刪除，會改回「冷知識」。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('刪除'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) return;
+
+    try {
+      await deleteUserCategoryFromSupabase(category);
+
+      if (!mounted) return;
+      setState(() {
+        selectedCategory = '全部';
+        availableCategories.remove(category);
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已刪除分類：$category')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('刪除分類失敗：$e')));
+    }
   }
 
   Future<void> copyText(String text) async {
@@ -1542,7 +1736,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
             scrollDirection: Axis.horizontal,
             itemBuilder: (context, index) {
               final category = categories[index];
-              return ChoiceChip(
+              return InputChip(
                 label: Text(category),
                 selected: selectedCategory == category,
                 onSelected: (_) {
@@ -1550,6 +1744,9 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                     selectedCategory = category;
                   });
                 },
+                onDeleted: isDefaultCategory(category)
+                    ? null
+                    : () => deleteCustomFavoriteCategory(category),
               );
             },
             separatorBuilder: (context, index) => const SizedBox(width: 8),
@@ -1629,7 +1826,8 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                     final createdBy = fact['created_by']?.toString();
                     final currentUserId = supabase.auth.currentUser?.id;
                     final canEditOwnFact =
-                        source == 'user' && createdBy == currentUserId;
+                        createdBy == currentUserId &&
+                        (source == 'user' || source == 'ai');
                     final translatedText = translatedFavorites[favoriteId];
                     final isTranslating = translatingFavoriteIds.contains(
                       favoriteId,
@@ -1740,11 +1938,29 @@ class _CatAiPageState extends State<CatAiPage> {
   final questionController = TextEditingController();
   String answer = '';
   bool isLoading = false;
+  bool isSavingAnswer = false;
+  bool isAnswerSaved = false;
+  String? savedAnswerCategory;
+  List<String> categories = [...factCategories];
 
   @override
   void dispose() {
     questionController.dispose();
     super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    loadCategories();
+  }
+
+  Future<void> loadCategories() async {
+    final loadedCategories = await loadUserCategoriesFromSupabase();
+    if (!mounted) return;
+    setState(() {
+      categories = loadedCategories;
+    });
   }
 
   Future<void> askCatAi() async {
@@ -1755,9 +1971,13 @@ class _CatAiPageState extends State<CatAiPage> {
       return;
     }
 
+    FocusScope.of(context).unfocus();
+
     setState(() {
       isLoading = true;
       answer = '';
+      isAnswerSaved = false;
+      savedAnswerCategory = null;
     });
 
     try {
@@ -1802,7 +2022,148 @@ class _CatAiPageState extends State<CatAiPage> {
     showMessage('已複製喵博士回答');
   }
 
-  Future<void> saveAnswer() async {
+  Future<String?> showAddCategoryDialog() async {
+    final controller = TextEditingController();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('新增分類'),
+          content: TextField(
+            controller: controller,
+            autofocus: false,
+            decoration: const InputDecoration(
+              labelText: '分類名稱',
+              hintText: '例如：飲食、睡眠、品種',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final text = controller.text.trim();
+                if (text.isEmpty) return;
+                Navigator.pop(context, text);
+              },
+              child: const Text('新增'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result;
+  }
+
+  bool isDefaultCategory(String category) {
+    return factCategories.contains(category);
+  }
+
+  Future<void> deleteCustomCategory(String category) async {
+    if (isDefaultCategory(category)) {
+      showMessage('預設分類不能刪除');
+      return;
+    }
+
+    try {
+      await deleteUserCategoryFromSupabase(category);
+    } catch (e) {
+      showMessage('刪除分類失敗：$e');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      categories.remove(category);
+    });
+
+    showMessage('已刪除分類：$category');
+  }
+
+  Future<void> openCategoryPickerForAnswer() async {
+    if (answer.isEmpty) {
+      showMessage('目前沒有可以收藏的回答');
+      return;
+    }
+
+    if (isAnswerSaved) {
+      showMessage('這則喵博士回答已收藏在 ${savedAnswerCategory ?? '收藏'}');
+      return;
+    }
+
+    if (isSavingAnswer) return;
+
+    await loadCategories();
+    if (!mounted) return;
+
+    final category = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(title: Text('選擇收藏分類')),
+              for (final category in categories)
+                ListTile(
+                  leading: const Icon(Icons.label_outline),
+                  title: Text(category),
+                  trailing: isDefaultCategory(category)
+                      ? null
+                      : IconButton(
+                          tooltip: '刪除此分類',
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            deleteCustomCategory(category);
+                          },
+                        ),
+                  onTap: () => Navigator.pop(context, category),
+                ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text('新增分類'),
+                onTap: () => Navigator.pop(context, '__add_category__'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (category == null) return;
+
+    if (category == '__add_category__') {
+      final newCategory = await showAddCategoryDialog();
+      if (newCategory == null || newCategory.isEmpty) return;
+
+      try {
+        await saveUserCategoryToSupabase(newCategory);
+      } catch (e) {
+        showMessage('分類儲存失敗：$e');
+        return;
+      }
+
+      if (!categories.contains(newCategory)) {
+        setState(() {
+          categories.add(newCategory);
+        });
+      }
+
+      await saveAnswer(newCategory);
+      return;
+    }
+
+    await saveAnswer(category);
+  }
+
+  Future<void> saveAnswer(String category) async {
     final user = supabase.auth.currentUser;
 
     if (user == null) {
@@ -1815,6 +2176,17 @@ class _CatAiPageState extends State<CatAiPage> {
       return;
     }
 
+    if (isAnswerSaved) {
+      showMessage('這則喵博士回答已收藏在 ${savedAnswerCategory ?? '收藏'}');
+      return;
+    }
+
+    if (isSavingAnswer) return;
+
+    setState(() {
+      isSavingAnswer = true;
+    });
+
     try {
       final savedFact = await supabase
           .from('cat_facts')
@@ -1823,7 +2195,7 @@ class _CatAiPageState extends State<CatAiPage> {
                 'ai-${user.id}-${DateTime.now().millisecondsSinceEpoch}',
             'text': answer,
             'source': 'ai',
-            'category': '冷知識',
+            'category': category,
             'created_by': user.id,
           })
           .select()
@@ -1832,11 +2204,21 @@ class _CatAiPageState extends State<CatAiPage> {
       await supabase.from('cat_fact_favorites').insert({
         'user_id': user.id,
         'fact_id': savedFact['id'],
-        'category': '冷知識',
+        'category': category,
       });
 
-      showMessage('已收藏喵博士回答');
+      if (!mounted) return;
+      setState(() {
+        isSavingAnswer = false;
+        isAnswerSaved = true;
+        savedAnswerCategory = category;
+      });
+      showMessage('已加入 $category 收藏，可到收藏頁查看');
     } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        isSavingAnswer = false;
+      });
       showMessage('收藏失敗：$e');
     }
   }
@@ -1873,92 +2255,155 @@ class _CatAiPageState extends State<CatAiPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Center(
-          child: buildLottieAsset(
-            catLottieAsset,
-            width: 140,
-            height: 140,
-            fallback: const Icon(
-              Icons.smart_toy,
-              size: 72,
-              color: Colors.orangeAccent,
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'AI 喵博士',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '問喵博士任何貓咪問題',
-          style: TextStyle(fontSize: 16, color: Colors.grey.shade700),
-        ),
-        const SizedBox(height: 24),
-        TextField(
-          controller: questionController,
-          minLines: 3,
-          maxLines: 6,
-          decoration: const InputDecoration(
-            labelText: '想問什麼？',
-            hintText: '例如：貓為什麼喜歡紙箱？',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        SizedBox(
-          height: 52,
-          child: FilledButton.icon(
-            onPressed: isLoading ? null : askCatAi,
-            icon: isLoading ? const Icon(Icons.pets) : const Icon(Icons.send),
-            label: Text(isLoading ? '喵博士思考中...' : '問喵博士'),
-          ),
-        ),
-        if (isLoading) ...[const SizedBox(height: 24), buildCatAiLoading()],
-        if (answer.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+    return ScrollConfiguration(
+      behavior: const ScrollBehavior().copyWith(overscroll: false),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.all(16),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.pets, color: Colors.orangeAccent),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          '喵博士回答',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+                  Center(
+                    child: buildLottieAsset(
+                      catLottieAsset,
+                      width: 140,
+                      height: 140,
+                      fallback: const Icon(
+                        Icons.smart_toy,
+                        size: 72,
+                        color: Colors.orangeAccent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'AI 喵博士',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '問喵博士任何貓咪問題',
+                    style: TextStyle(fontSize: 16, color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 24),
+                  TextField(
+                    controller: questionController,
+                    autofocus: false,
+                    scrollPhysics: const ClampingScrollPhysics(),
+                    minLines: 3,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      labelText: '想問什麼？',
+                      hintText: '例如：貓為什麼喜歡紙箱？',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 52,
+                    child: FilledButton.icon(
+                      onPressed: isLoading ? null : askCatAi,
+                      icon: isLoading
+                          ? const Icon(Icons.pets)
+                          : const Icon(Icons.send),
+                      label: Text(isLoading ? '喵博士思考中...' : '問喵博士'),
+                    ),
+                  ),
+                  if (isLoading) ...[
+                    const SizedBox(height: 24),
+                    buildCatAiLoading(),
+                  ],
+                  if (answer.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    Card(
+                      elevation: 3,
+                      shadowColor: Colors.orange.withAlpha(40),
+                      margin: const EdgeInsets.only(bottom: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.orange.shade100),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: Colors.white,
+                                    child: Icon(
+                                      Icons.pets,
+                                      color: Colors.orange.shade700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
+                                    child: Text(
+                                      '喵博士回答',
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: copyAnswer,
+                                    icon: const Icon(Icons.copy_outlined),
+                                  ),
+                                  IconButton(
+                                    tooltip: '選擇分類並收藏',
+                                    onPressed: isSavingAnswer
+                                        ? null
+                                        : openCategoryPickerForAnswer,
+                                    icon: isSavingAnswer
+                                        ? const SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : Icon(
+                                            isAnswerSaved
+                                                ? Icons.favorite
+                                                : Icons.favorite_border,
+                                          ),
+                                    color: Colors.redAccent,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              SelectableText(
+                                answer,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  height: 1.5,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      IconButton(
-                        onPressed: copyAnswer,
-                        icon: const Icon(Icons.copy_outlined),
-                      ),
-                      IconButton(
-                        onPressed: saveAnswer,
-                        icon: const Icon(Icons.favorite),
-                        color: Colors.redAccent,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    answer,
-                    style: const TextStyle(fontSize: 16, height: 1.5),
-                  ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ),
-        ],
-      ],
+          );
+        },
+      ),
     );
   }
 }
@@ -1974,7 +2419,7 @@ class _AddFactPageState extends State<AddFactPage> {
   final factController = TextEditingController();
   String category = '冷知識';
   bool isLoading = false;
-  final List<String> categories = [...factCategories];
+  List<String> categories = [...factCategories];
 
   @override
   void dispose() {
@@ -1982,17 +2427,34 @@ class _AddFactPageState extends State<AddFactPage> {
     super.dispose();
   }
 
+  @override
+  void initState() {
+    super.initState();
+    loadCategories();
+  }
+
+  Future<void> loadCategories() async {
+    final loadedCategories = await loadUserCategoriesFromSupabase();
+    if (!mounted) return;
+    setState(() {
+      categories = loadedCategories;
+      if (!categories.contains(category)) {
+        category = '冷知識';
+      }
+    });
+  }
+
   Future<void> showAddCategoryDialog() async {
     final controller = TextEditingController();
 
     final newCategory = await showDialog<String>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('新增分類'),
           content: TextField(
             controller: controller,
-            autofocus: true,
+            autofocus: false,
             decoration: const InputDecoration(
               labelText: '分類名稱',
               hintText: '例如：飲食、睡眠、品種',
@@ -2001,14 +2463,14 @@ class _AddFactPageState extends State<AddFactPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('取消'),
             ),
             FilledButton(
               onPressed: () {
                 final text = controller.text.trim();
                 if (text.isEmpty) return;
-                Navigator.pop(context, text);
+                Navigator.pop(dialogContext, text);
               },
               child: const Text('新增'),
             ),
@@ -2017,16 +2479,128 @@ class _AddFactPageState extends State<AddFactPage> {
       },
     );
 
-    controller.dispose();
-
-    if (newCategory == null || newCategory.isEmpty) return;
     if (!mounted) return;
+    if (newCategory == null || newCategory.trim().isEmpty) return;
+
+    final cleanCategory = newCategory.trim();
+
+    try {
+      await saveUserCategoryToSupabase(cleanCategory);
+    } catch (e) {
+      showMessage('分類儲存失敗：$e');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      if (!categories.contains(cleanCategory)) {
+        categories.add(cleanCategory);
+      }
+      category = cleanCategory;
+    });
+
+    showMessage('已新增分類：$cleanCategory');
+  }
+
+  bool isDefaultCategory(String item) {
+    return factCategories.contains(item);
+  }
+
+  Future<void> deleteCustomCategory(String item) async {
+    if (isDefaultCategory(item)) {
+      showMessage('預設分類不能刪除');
+      return;
+    }
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('刪除分類'),
+          content: Text('確定要刪除「$item」這個分類嗎？\n已經收藏的資料不會被刪除。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('刪除'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) return;
+
+    try {
+      await deleteUserCategoryFromSupabase(item);
+    } catch (e) {
+      showMessage('刪除分類失敗：$e');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      categories.remove(item);
+      if (category == item) {
+        category = '冷知識';
+      }
+    });
+
+    showMessage('已刪除分類：$item');
+  }
+
+  Future<void> openCategoryPicker() async {
+    await loadCategories();
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(title: Text('選擇分類')),
+              for (final item in categories)
+                ListTile(
+                  leading: const Icon(Icons.label_outline),
+                  title: Text(item),
+                  selected: category == item,
+                  trailing: isDefaultCategory(item)
+                      ? null
+                      : IconButton(
+                          tooltip: '刪除此分類',
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            deleteCustomCategory(item);
+                          },
+                        ),
+                  onTap: () => Navigator.pop(context, item),
+                ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text('新增分類'),
+                onTap: () => Navigator.pop(context, '__add_category__'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (selected == null) return;
+
+    if (selected == '__add_category__') {
+      await showAddCategoryDialog();
+      return;
+    }
 
     setState(() {
-      if (!categories.contains(newCategory)) {
-        categories.add(newCategory);
-      }
-      category = newCategory;
+      category = selected;
     });
   }
 
@@ -2043,6 +2617,8 @@ class _AddFactPageState extends State<AddFactPage> {
       showMessage('請輸入你想新增的 Cat Fact');
       return;
     }
+
+    FocusScope.of(context).unfocus();
 
     setState(() {
       isLoading = true;
@@ -2094,6 +2670,8 @@ class _AddFactPageState extends State<AddFactPage> {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      physics: const ClampingScrollPhysics(),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.all(16),
       children: [
         Container(
@@ -2165,6 +2743,8 @@ class _AddFactPageState extends State<AddFactPage> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: factController,
+                  autofocus: false,
+                  scrollPhysics: const ClampingScrollPhysics(),
                   minLines: 4,
                   maxLines: 8,
                   decoration: const InputDecoration(
@@ -2181,26 +2761,36 @@ class _AddFactPageState extends State<AddFactPage> {
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final item in categories)
-                      ChoiceChip(
-                        label: Text(item),
-                        selected: category == item,
-                        onSelected: (_) {
-                          setState(() {
-                            category = item;
-                          });
-                        },
-                      ),
-                    ActionChip(
-                      avatar: const Icon(Icons.add, size: 18),
-                      label: const Text('新增分類'),
-                      onPressed: showAddCategoryDialog,
+                InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: openCategoryPicker,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 14,
                     ),
-                  ],
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.orange.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.label_outline),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            category,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const Icon(Icons.keyboard_arrow_down),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -2249,7 +2839,7 @@ class SectionTitle extends StatelessWidget {
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
-        ?trailing,
+        if (trailing != null) trailing!,
       ],
     );
   }
@@ -2305,7 +2895,16 @@ class CatFactCard extends StatelessWidget {
                     backgroundColor: Colors.white,
                     child: Icon(Icons.pets, color: Colors.orange.shade700),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                   IconButton(
                     onPressed: onCopy,
                     icon: const Icon(Icons.copy_outlined),
@@ -2339,9 +2938,12 @@ class CatFactCard extends StatelessWidget {
                 children: [
                   if (isFavorite && favoriteCategory != null)
                     Chip(
-                      avatar: const Icon(Icons.label_outline, size: 16),
                       label: Text(favoriteCategory!),
-                      backgroundColor: Colors.white,
+                      backgroundColor: Colors.orange.shade100,
+                      labelStyle: TextStyle(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   const Spacer(),
                   OutlinedButton.icon(
@@ -2364,18 +2966,18 @@ class CatFactCard extends StatelessWidget {
                 ],
               ),
               if (translatedText != null) ...[
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: Colors.orange.shade100),
                   ),
                   child: Text(
                     translatedText!,
-                    style: const TextStyle(fontSize: 16, height: 1.45),
+                    style: const TextStyle(fontSize: 16, height: 1.4),
                   ),
                 ),
               ],
