@@ -631,17 +631,22 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int selectedIndex = 0;
+  final discoverPageKey = GlobalKey<_DiscoverPageState>();
+  final favoriteFactsPageKey = GlobalKey<_FavoriteFactsPageState>();
+  final catAiPageKey = GlobalKey<_CatAiPageState>();
+  final addFactPageKey = GlobalKey<_AddFactPageState>();
 
-  final pages = const [
-    DiscoverPage(),
-    FavoriteFactsPage(),
-    CatAiPage(),
-    AddFactPage(),
+  late final pages = [
+    DiscoverPage(key: discoverPageKey),
+    FavoriteFactsPage(key: favoriteFactsPageKey),
+    CatAiPage(key: catAiPageKey),
+    AddFactPage(key: addFactPageKey),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Row(
           children: [
@@ -676,6 +681,16 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             selectedIndex = index;
           });
+
+          if (index == 0) {
+            discoverPageKey.currentState?.refreshCategories();
+          } else if (index == 1) {
+            favoriteFactsPageKey.currentState?.refreshCategoriesAndFavorites();
+          } else if (index == 2) {
+            catAiPageKey.currentState?.refreshCategories();
+          } else if (index == 3) {
+            addFactPageKey.currentState?.refreshCategories();
+          }
         },
         destinations: const [
           NavigationDestination(
@@ -740,6 +755,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
     setState(() {
       categories = loadedCategories;
     });
+  }
+
+  Future<void> refreshCategories() async {
+    await loadCategories();
   }
 
   String getDailyFactKey() {
@@ -1422,6 +1441,12 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     });
   }
 
+  Future<void> refreshCategoriesAndFavorites() async {
+    await loadCategories();
+    if (!mounted) return;
+    setState(() {});
+  }
+
   Future<List<Map<String, dynamic>>> fetchFavorites() async {
     final user = supabase.auth.currentUser;
     if (user == null) return [];
@@ -1450,7 +1475,19 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       }
     }
 
-    availableCategories = categorySet.toList();
+    final updatedCategories = categorySet.toList();
+    if (mounted &&
+        updatedCategories.join('|') != availableCategories.join('|')) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          availableCategories = updatedCategories;
+        });
+      });
+    } else {
+      availableCategories = updatedCategories;
+    }
+
     return favorites;
   }
 
@@ -1963,6 +2000,10 @@ class _CatAiPageState extends State<CatAiPage> {
     });
   }
 
+  Future<void> refreshCategories() async {
+    await loadCategories();
+  }
+
   Future<void> askCatAi() async {
     final question = questionController.text.trim();
 
@@ -2262,7 +2303,12 @@ class _CatAiPageState extends State<CatAiPage> {
           return SingleChildScrollView(
             physics: const ClampingScrollPhysics(),
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + MediaQuery.of(context).viewInsets.bottom,
+            ),
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Column(
@@ -2442,6 +2488,10 @@ class _AddFactPageState extends State<AddFactPage> {
         category = '冷知識';
       }
     });
+  }
+
+  Future<void> refreshCategories() async {
+    await loadCategories();
   }
 
   Future<void> showAddCategoryDialog() async {
@@ -2672,7 +2722,12 @@ class _AddFactPageState extends State<AddFactPage> {
     return ListView(
       physics: const ClampingScrollPhysics(),
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
       children: [
         Container(
           padding: const EdgeInsets.all(20),
