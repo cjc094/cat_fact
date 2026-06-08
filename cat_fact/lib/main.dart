@@ -136,6 +136,39 @@ class CatFact {
   final String source;
   final String category;
 }
+List<TextSpan> buildMarkdownLikeSpans(
+  String text, {
+  required TextStyle normalStyle,
+  required TextStyle boldStyle,
+}) {
+  final spans = <TextSpan>[];
+  var currentIndex = 0;
+  final boldPattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
+
+  for (final match in boldPattern.allMatches(text)) {
+    if (match.start > currentIndex) {
+      spans.add(
+        TextSpan(
+          text: text.substring(currentIndex, match.start),
+          style: normalStyle,
+        ),
+      );
+    }
+
+    final boldText = match.group(1) ?? '';
+    spans.add(TextSpan(text: boldText, style: boldStyle));
+    currentIndex = match.end;
+  }
+
+  if (currentIndex < text.length) {
+    spans.add(
+      TextSpan(text: text.substring(currentIndex), style: normalStyle),
+    );
+  }
+
+  return spans;
+}
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -1049,6 +1082,28 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
     if (savingFavoriteFactIds.contains(fact.id)) return;
 
+    final shouldRemove = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('取消收藏'),
+          content: const Text('確定要取消收藏這則 Cat Fact 嗎？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('取消收藏'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldRemove != true) return;
+
     setState(() {
       savingFavoriteFactIds.add(fact.id);
     });
@@ -1491,7 +1546,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     return favorites;
   }
 
-  Future<void> removeFavorite(String favoriteId) async {
+  Future<void> removeFavorite(Map<String, dynamic> favorite) async {
     final shouldRemove = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -1514,12 +1569,34 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
 
     if (shouldRemove != true) return;
 
-    await supabase.from('cat_fact_favorites').delete().eq('id', favoriteId);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已取消收藏')));
-    setState(() {});
+    final fact = favorite['cat_facts'] as Map<String, dynamic>?;
+    final factId = fact?['id']?.toString();
+    final source = fact?['source']?.toString();
+    final createdBy = fact?['created_by']?.toString();
+    final currentUserId = supabase.auth.currentUser?.id;
+    final shouldDeleteFact =
+        factId != null &&
+        factId.isNotEmpty &&
+        ((source == 'user' && createdBy == currentUserId) || source == 'ai');
+
+    try {
+      await supabase.from('cat_fact_favorites').delete().eq('id', favorite['id']);
+
+      if (shouldDeleteFact) {
+        await supabase.from('cat_facts').delete().eq('id', factId);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已取消收藏')));
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('取消收藏失敗：$e')));
+    }
   }
 
   bool isDefaultCategory(String category) {
@@ -1693,54 +1770,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     }
   }
 
-  Future<void> deleteOwnFact(Map<String, dynamic> favorite) async {
-    final fact = favorite['cat_facts'] as Map<String, dynamic>;
-    final factId = fact['id']?.toString();
-    final text = fact['text']?.toString() ?? '';
-
-    if (factId == null || factId.isEmpty) return;
-
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('刪除我的冷知識'),
-          content: Text('確定要永久刪除這則冷知識嗎？\n\n$text'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('刪除'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (shouldDelete != true) return;
-
-    try {
-      await supabase
-          .from('cat_fact_favorites')
-          .delete()
-          .eq('id', favorite['id']);
-      await supabase.from('cat_facts').delete().eq('id', factId);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已刪除我的冷知識')));
-      setState(() {});
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('刪除失敗：$e')));
-    }
-  }
+  
 
   Future<void> translateFavorite(String favoriteId, String text) async {
     if (translatedFavorites.containsKey(favoriteId)) {
@@ -1786,38 +1816,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     }
   }
 
-  List<TextSpan> buildMarkdownLikeSpans(
-    String text, {
-    required TextStyle normalStyle,
-    required TextStyle boldStyle,
-  }) {
-    final spans = <TextSpan>[];
-    var currentIndex = 0;
-    final boldPattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
-
-    for (final match in boldPattern.allMatches(text)) {
-      if (match.start > currentIndex) {
-        spans.add(
-          TextSpan(
-            text: text.substring(currentIndex, match.start),
-            style: normalStyle,
-          ),
-        );
-      }
-
-      final boldText = match.group(1) ?? '';
-      spans.add(TextSpan(text: boldText, style: boldStyle));
-      currentIndex = match.end;
-    }
-
-    if (currentIndex < text.length) {
-      spans.add(
-        TextSpan(text: text.substring(currentIndex), style: normalStyle),
-      );
-    }
-
-    return spans;
-  }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -1950,8 +1949,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                                   icon: const Icon(Icons.copy_outlined),
                                 ),
                                 IconButton(
-                                  onPressed: () =>
-                                      removeFavorite(favorite['id']),
+                                  onPressed: () => removeFavorite(favorite),
                                   icon: const Icon(Icons.favorite),
                                   color: Colors.redAccent,
                                 ),
@@ -2255,9 +2253,9 @@ class _CatAiPageState extends State<CatAiPage> {
           .eq('id', savedFavoriteId!)
           .eq('user_id', user.id);
 
-      // 喵博士收藏的主同步狀態以 cat_fact_favorites 為準。
-      // cat_facts 可能因資料表外鍵設計無法寫入 created_by，所以這裡不硬刪 fact 本體，
-      // 避免取消收藏時又被 created_by 外鍵或 RLS 卡住。
+      if (savedFactId != null && savedFactId!.isNotEmpty) {
+        await supabase.from('cat_facts').delete().eq('id', savedFactId!);
+      }
 
       if (!mounted) return;
       setState(() {
@@ -2552,38 +2550,7 @@ class _CatAiPageState extends State<CatAiPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  List<TextSpan> buildMarkdownLikeSpans(
-    String text, {
-    required TextStyle normalStyle,
-    required TextStyle boldStyle,
-  }) {
-    final spans = <TextSpan>[];
-    var currentIndex = 0;
-    final boldPattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
-
-    for (final match in boldPattern.allMatches(text)) {
-      if (match.start > currentIndex) {
-        spans.add(
-          TextSpan(
-            text: text.substring(currentIndex, match.start),
-            style: normalStyle,
-          ),
-        );
-      }
-
-      final boldText = match.group(1) ?? '';
-      spans.add(TextSpan(text: boldText, style: boldStyle));
-      currentIndex = match.end;
-    }
-
-    if (currentIndex < text.length) {
-      spans.add(
-        TextSpan(text: text.substring(currentIndex), style: normalStyle),
-      );
-    }
-
-    return spans;
-  }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -3292,18 +3259,11 @@ class CatFactCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  if (isFavorite && favoriteCategory != null)
-                    Chip(
-                      label: Text(favoriteCategory!),
-                      backgroundColor: Colors.orange.shade100,
-                      labelStyle: TextStyle(
-                        color: Colors.orange.shade900,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  const Spacer(),
                   OutlinedButton.icon(
                     onPressed: isTranslating ? null : onTranslate,
                     icon: isTranslating
@@ -3321,21 +3281,47 @@ class CatFactCard extends StatelessWidget {
                           : '已翻譯',
                     ),
                   ),
+                  if (isFavorite && favoriteCategory != null)
+                    Chip(
+                      label: Text(favoriteCategory!),
+                      backgroundColor: Colors.orange.shade100,
+                      labelStyle: TextStyle(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                 ],
               ),
               if (translatedText != null) ...[
                 const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.orange.shade100),
-                  ),
-                  child: Text(
-                    translatedText!,
-                    style: const TextStyle(fontSize: 16, height: 1.4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: SelectableText.rich(
+                      TextSpan(
+                        children: buildMarkdownLikeSpans(
+                          translatedText!,
+                          normalStyle: const TextStyle(
+                            fontSize: 16,
+                            height: 1.4,
+                            color: Colors.black87,
+                          ),
+                          boldStyle: const TextStyle(
+                            fontSize: 16,
+                            height: 1.4,
+                            color: Colors.black87,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      textAlign: TextAlign.left,
+                    ),
                   ),
                 ),
               ],
