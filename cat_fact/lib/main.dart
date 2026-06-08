@@ -1685,47 +1685,66 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
           builder: (context, setDialogState) {
             return AlertDialog(
               title: const Text('編輯我的冷知識'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: textController,
-                    minLines: 4,
-                    maxLines: 8,
-                    decoration: const InputDecoration(
-                      labelText: 'Cat Fact 內容',
-                      border: OutlineInputBorder(),
-                    ),
+              content: SingleChildScrollView(
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.of(context).size.width * 0.82,
                   ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedEditCategory,
-                    decoration: const InputDecoration(
-                      labelText: '分類',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: editCategories
-                        .map(
-                          (item) =>
-                              DropdownMenuItem(value: item, child: Text(item)),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setDialogState(() {
-                        selectedEditCategory = value;
-                      });
-                    },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: textController,
+                        autofocus: false,
+                        minLines: 3,
+                        maxLines: 5,
+                        decoration: const InputDecoration(
+                          labelText: 'Cat Fact 內容',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedEditCategory,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: '分類',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: editCategories
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(
+                                  item,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() {
+                            selectedEditCategory = value;
+                          });
+                        },
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    FocusScope.of(context).unfocus();
+                    Navigator.pop(context);
+                  },
                   child: const Text('取消'),
                 ),
                 FilledButton(
                   onPressed: () {
+                    FocusScope.of(context).unfocus();
                     final text = textController.text.trim();
                     if (text.isEmpty) return;
                     Navigator.pop(context, {
@@ -1742,7 +1761,6 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       },
     );
 
-    textController.dispose();
 
     if (result == null) return;
 
