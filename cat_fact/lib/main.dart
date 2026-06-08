@@ -1492,7 +1492,33 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
   }
 
   Future<void> removeFavorite(String favoriteId) async {
+    final shouldRemove = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('取消收藏'),
+          content: const Text('確定要取消收藏這則 Cat Fact 嗎？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('取消收藏'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldRemove != true) return;
+
     await supabase.from('cat_fact_favorites').delete().eq('id', favoriteId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已取消收藏')));
     setState(() {});
   }
 
@@ -1760,6 +1786,39 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
     }
   }
 
+  List<TextSpan> buildMarkdownLikeSpans(
+    String text, {
+    required TextStyle normalStyle,
+    required TextStyle boldStyle,
+  }) {
+    final spans = <TextSpan>[];
+    var currentIndex = 0;
+    final boldPattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
+
+    for (final match in boldPattern.allMatches(text)) {
+      if (match.start > currentIndex) {
+        spans.add(
+          TextSpan(
+            text: text.substring(currentIndex, match.start),
+            style: normalStyle,
+          ),
+        );
+      }
+
+      final boldText = match.group(1) ?? '';
+      spans.add(TextSpan(text: boldText, style: boldStyle));
+      currentIndex = match.end;
+    }
+
+    if (currentIndex < text.length) {
+      spans.add(
+        TextSpan(text: text.substring(currentIndex), style: normalStyle),
+      );
+    }
+
+    return spans;
+  }
+
   @override
   Widget build(BuildContext context) {
     final categories = availableCategories;
@@ -1886,11 +1945,6 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                                     onPressed: () => editOwnFact(favorite),
                                     icon: const Icon(Icons.edit_outlined),
                                   ),
-                                if (canEditOwnFact)
-                                  IconButton(
-                                    onPressed: () => deleteOwnFact(favorite),
-                                    icon: const Icon(Icons.delete_outline),
-                                  ),
                                 IconButton(
                                   onPressed: () => copyText(text),
                                   icon: const Icon(Icons.copy_outlined),
@@ -1904,9 +1958,23 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                               ],
                             ),
                             const SizedBox(height: 8),
-                            Text(
-                              text,
-                              style: const TextStyle(fontSize: 16, height: 1.4),
+                            SelectableText.rich(
+                              TextSpan(
+                                children: buildMarkdownLikeSpans(
+                                  text,
+                                  normalStyle: const TextStyle(
+                                    fontSize: 16,
+                                    height: 1.4,
+                                    color: Colors.black87,
+                                  ),
+                                  boldStyle: const TextStyle(
+                                    fontSize: 16,
+                                    height: 1.4,
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
                             ),
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
@@ -1939,11 +2007,22 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                                   color: Colors.orange.shade50,
                                   borderRadius: BorderRadius.circular(12),
                                 ),
-                                child: Text(
-                                  translatedText,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    height: 1.4,
+                                child: SelectableText.rich(
+                                  TextSpan(
+                                    children: buildMarkdownLikeSpans(
+                                      translatedText,
+                                      normalStyle: const TextStyle(
+                                        fontSize: 16,
+                                        height: 1.4,
+                                        color: Colors.black87,
+                                      ),
+                                      boldStyle: const TextStyle(
+                                        fontSize: 16,
+                                        height: 1.4,
+                                        color: Colors.black87,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1973,16 +2052,21 @@ class CatAiPage extends StatefulWidget {
 
 class _CatAiPageState extends State<CatAiPage> {
   final questionController = TextEditingController();
+  final questionFocusNode = FocusNode();
+  String questionForCurrentAnswer = '';
   String answer = '';
   bool isLoading = false;
   bool isSavingAnswer = false;
   bool isAnswerSaved = false;
   String? savedAnswerCategory;
+  String? savedFavoriteId;
+  String? savedFactId;
   List<String> categories = [...factCategories];
 
   @override
   void dispose() {
     questionController.dispose();
+    questionFocusNode.dispose();
     super.dispose();
   }
 
@@ -2002,6 +2086,54 @@ class _CatAiPageState extends State<CatAiPage> {
 
   Future<void> refreshCategories() async {
     await loadCategories();
+    await refreshSavedAnswerStatus();
+  }
+
+  Future<void> refreshSavedAnswerStatus() async {
+    final user = supabase.auth.currentUser;
+
+    if (user == null || !isAnswerSaved) return;
+
+    if (savedFavoriteId == null) {
+      setState(() {
+        isAnswerSaved = false;
+        savedAnswerCategory = null;
+        savedFavoriteId = null;
+        savedFactId = null;
+      });
+      return;
+    }
+
+    try {
+      final rows = await supabase
+          .from('cat_fact_favorites')
+          .select('id, category, fact_id')
+          .eq('id', savedFavoriteId!)
+          .eq('user_id', user.id)
+          .limit(1);
+
+      if (!mounted) return;
+
+      if (rows.isEmpty) {
+        setState(() {
+          isAnswerSaved = false;
+          savedAnswerCategory = null;
+          savedFavoriteId = null;
+          savedFactId = null;
+        });
+        return;
+      }
+
+      final favorite = rows.first;
+      setState(() {
+        isAnswerSaved = true;
+        savedAnswerCategory = favorite['category']?.toString();
+        savedFavoriteId = favorite['id']?.toString();
+        savedFactId = favorite['fact_id']?.toString();
+      });
+    } catch (_) {
+      // 同步失敗時不影響喵博士畫面，避免使用者只是切頁就跳錯誤。
+    }
   }
 
   Future<void> askCatAi() async {
@@ -2013,12 +2145,16 @@ class _CatAiPageState extends State<CatAiPage> {
     }
 
     FocusScope.of(context).unfocus();
+    questionFocusNode.unfocus();
 
     setState(() {
       isLoading = true;
       answer = '';
+      questionForCurrentAnswer = question;
       isAnswerSaved = false;
       savedAnswerCategory = null;
+      savedFavoriteId = null;
+      savedFactId = null;
     });
 
     try {
@@ -2061,6 +2197,84 @@ class _CatAiPageState extends State<CatAiPage> {
 
     await Clipboard.setData(ClipboardData(text: answer));
     showMessage('已複製喵博士回答');
+  }
+
+  Future<void> removeSavedAnswerFavorite() async {
+    final user = supabase.auth.currentUser;
+
+    if (user == null) {
+      showMessage('請先登入');
+      return;
+    }
+
+    if (!isAnswerSaved || savedFavoriteId == null) {
+      setState(() {
+        isAnswerSaved = false;
+        savedAnswerCategory = null;
+        savedFavoriteId = null;
+        savedFactId = null;
+      });
+      return;
+    }
+
+    final shouldRemove = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('取消收藏'),
+          content: const Text('確定要取消收藏這則喵博士回答嗎？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('取消收藏'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldRemove != true) return;
+
+    if (isSavingAnswer) return;
+
+    FocusScope.of(context).unfocus();
+    questionFocusNode.unfocus();
+
+    setState(() {
+      isSavingAnswer = true;
+    });
+
+    try {
+      await supabase
+          .from('cat_fact_favorites')
+          .delete()
+          .eq('id', savedFavoriteId!)
+          .eq('user_id', user.id);
+
+      // 喵博士收藏的主同步狀態以 cat_fact_favorites 為準。
+      // cat_facts 可能因資料表外鍵設計無法寫入 created_by，所以這裡不硬刪 fact 本體，
+      // 避免取消收藏時又被 created_by 外鍵或 RLS 卡住。
+
+      if (!mounted) return;
+      setState(() {
+        isSavingAnswer = false;
+        isAnswerSaved = false;
+        savedAnswerCategory = null;
+        savedFavoriteId = null;
+        savedFactId = null;
+      });
+      showMessage('已取消收藏，可以再次收藏這則喵博士回答');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        isSavingAnswer = false;
+      });
+      showMessage('取消收藏失敗：$e');
+    }
   }
 
   Future<String?> showAddCategoryDialog() async {
@@ -2127,13 +2341,16 @@ class _CatAiPageState extends State<CatAiPage> {
   }
 
   Future<void> openCategoryPickerForAnswer() async {
+    FocusScope.of(context).unfocus();
+    questionFocusNode.unfocus();
+
     if (answer.isEmpty) {
       showMessage('目前沒有可以收藏的回答');
       return;
     }
 
     if (isAnswerSaved) {
-      showMessage('這則喵博士回答已收藏在 ${savedAnswerCategory ?? '收藏'}');
+      await removeSavedAnswerFavorite();
       return;
     }
 
@@ -2144,44 +2361,62 @@ class _CatAiPageState extends State<CatAiPage> {
 
     final category = await showModalBottomSheet<String>(
       context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
       builder: (context) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const ListTile(title: Text('選擇收藏分類')),
-              for (final category in categories)
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const ListTile(title: Text('選擇收藏分類')),
+                for (final category in categories)
+                  ListTile(
+                    leading: const Icon(Icons.label_outline),
+                    title: Text(category),
+                    trailing: isDefaultCategory(category)
+                        ? null
+                        : IconButton(
+                            tooltip: '刪除此分類',
+                            icon: const Icon(Icons.close),
+                            onPressed: () {
+                              Navigator.pop(context);
+                              deleteCustomCategory(category);
+                            },
+                          ),
+                    onTap: () {
+                      FocusScope.of(context).unfocus();
+                      Navigator.pop(context, category);
+                    },
+                  ),
+                const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.label_outline),
-                  title: Text(category),
-                  trailing: isDefaultCategory(category)
-                      ? null
-                      : IconButton(
-                          tooltip: '刪除此分類',
-                          icon: const Icon(Icons.close),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            deleteCustomCategory(category);
-                          },
-                        ),
-                  onTap: () => Navigator.pop(context, category),
+                  leading: const Icon(Icons.add),
+                  title: const Text('新增分類'),
+                  onTap: () {
+                    FocusScope.of(context).unfocus();
+                    Navigator.pop(context, '__add_category__');
+                  },
                 ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('新增分類'),
-                onTap: () => Navigator.pop(context, '__add_category__'),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
 
+    FocusScope.of(context).unfocus();
+    questionFocusNode.unfocus();
+
     if (category == null) return;
 
     if (category == '__add_category__') {
       final newCategory = await showAddCategoryDialog();
+      FocusScope.of(context).unfocus();
+      questionFocusNode.unfocus();
       if (newCategory == null || newCategory.isEmpty) return;
 
       try {
@@ -2218,41 +2453,64 @@ class _CatAiPageState extends State<CatAiPage> {
     }
 
     if (isAnswerSaved) {
-      showMessage('這則喵博士回答已收藏在 ${savedAnswerCategory ?? '收藏'}');
+      await removeSavedAnswerFavorite();
       return;
     }
 
     if (isSavingAnswer) return;
+
+    FocusScope.of(context).unfocus();
+    questionFocusNode.unfocus();
 
     setState(() {
       isSavingAnswer = true;
     });
 
     try {
-      final savedFact = await supabase
-          .from('cat_facts')
-          .insert({
-            'api_fact_id':
-                'ai-${user.id}-${DateTime.now().millisecondsSinceEpoch}',
-            'text': answer,
-            'source': 'ai',
-            'category': category,
-            'created_by': user.id,
-          })
-          .select()
-          .single();
-
-      await supabase.from('cat_fact_favorites').insert({
-        'user_id': user.id,
-        'fact_id': savedFact['id'],
+      final apiFactId = 'ai-${user.id}-${DateTime.now().millisecondsSinceEpoch}';
+      final factPayload = {
+        'api_fact_id': apiFactId,
+        'text': answer,
+        'source': 'ai',
         'category': category,
-      });
+      };
+
+      Map<String, dynamic> savedFact;
+      try {
+        savedFact = await supabase
+            .from('cat_facts')
+            .insert({...factPayload, 'created_by': user.id})
+            .select()
+            .single();
+      } on PostgrestException catch (e) {
+        if (e.code != '23503' || !e.message.contains('created_by')) {
+          rethrow;
+        }
+
+        savedFact = await supabase
+            .from('cat_facts')
+            .insert(factPayload)
+            .select()
+            .single();
+      }
+
+      final savedFavorite = await supabase
+          .from('cat_fact_favorites')
+          .insert({
+            'user_id': user.id,
+            'fact_id': savedFact['id'],
+            'category': category,
+          })
+          .select('id')
+          .single();
 
       if (!mounted) return;
       setState(() {
         isSavingAnswer = false;
         isAnswerSaved = true;
         savedAnswerCategory = category;
+        savedFavoriteId = savedFavorite['id']?.toString();
+        savedFactId = savedFact['id']?.toString();
       });
       showMessage('已加入 $category 收藏，可到收藏頁查看');
     } catch (e) {
@@ -2292,6 +2550,39 @@ class _CatAiPageState extends State<CatAiPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  List<TextSpan> buildMarkdownLikeSpans(
+    String text, {
+    required TextStyle normalStyle,
+    required TextStyle boldStyle,
+  }) {
+    final spans = <TextSpan>[];
+    var currentIndex = 0;
+    final boldPattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
+
+    for (final match in boldPattern.allMatches(text)) {
+      if (match.start > currentIndex) {
+        spans.add(
+          TextSpan(
+            text: text.substring(currentIndex, match.start),
+            style: normalStyle,
+          ),
+        );
+      }
+
+      final boldText = match.group(1) ?? '';
+      spans.add(TextSpan(text: boldText, style: boldStyle));
+      currentIndex = match.end;
+    }
+
+    if (currentIndex < text.length) {
+      spans.add(
+        TextSpan(text: text.substring(currentIndex), style: normalStyle),
+      );
+    }
+
+    return spans;
   }
 
   @override
@@ -2339,6 +2630,7 @@ class _CatAiPageState extends State<CatAiPage> {
                   const SizedBox(height: 24),
                   TextField(
                     controller: questionController,
+                    focusNode: questionFocusNode,
                     autofocus: false,
                     scrollPhysics: const ClampingScrollPhysics(),
                     minLines: 3,
@@ -2408,7 +2700,7 @@ class _CatAiPageState extends State<CatAiPage> {
                                     icon: const Icon(Icons.copy_outlined),
                                   ),
                                   IconButton(
-                                    tooltip: '選擇分類並收藏',
+                                    tooltip: isAnswerSaved ? '取消收藏' : '選擇分類並收藏',
                                     onPressed: isSavingAnswer
                                         ? null
                                         : openCategoryPickerForAnswer,
@@ -2430,12 +2722,23 @@ class _CatAiPageState extends State<CatAiPage> {
                                 ],
                               ),
                               const SizedBox(height: 14),
-                              SelectableText(
-                                answer,
-                                style: const TextStyle(
-                                  fontSize: 17,
-                                  height: 1.5,
-                                  fontWeight: FontWeight.w500,
+                              SelectableText.rich(
+                                TextSpan(
+                                  children: buildMarkdownLikeSpans(
+                                    answer,
+                                    normalStyle: const TextStyle(
+                                      fontSize: 17,
+                                      height: 1.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.black87,
+                                    ),
+                                    boldStyle: const TextStyle(
+                                      fontSize: 17,
+                                      height: 1.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
@@ -2749,7 +3052,7 @@ class _AddFactPageState extends State<AddFactPage> {
                   color: Colors.orange.shade700,
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2761,8 +3064,8 @@ class _AddFactPageState extends State<AddFactPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    SizedBox(height: 6),
-                    Text('你新增的內容會自動加入自己的收藏。'),
+                    SizedBox(height: 4),
+                    Text('新增的內容會自動加入自己的收藏。', style: TextStyle(fontSize: 14)),
                   ],
                 ),
               ),
