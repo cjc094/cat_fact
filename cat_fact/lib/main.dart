@@ -136,6 +136,7 @@ class CatFact {
   final String source;
   final String category;
 }
+
 List<TextSpan> buildMarkdownLikeSpans(
   String text, {
   required TextStyle normalStyle,
@@ -161,14 +162,11 @@ List<TextSpan> buildMarkdownLikeSpans(
   }
 
   if (currentIndex < text.length) {
-    spans.add(
-      TextSpan(text: text.substring(currentIndex), style: normalStyle),
-    );
+    spans.add(TextSpan(text: text.substring(currentIndex), style: normalStyle));
   }
 
   return spans;
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -1391,9 +1389,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         await loadRandomList();
       },
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         children: [
-          const SectionTitle(title: '每日一則 Cat Fact'),
           if (isLoadingDaily)
             buildCatLoading('每日冷知識讀取中...')
           else if (dailyFact != null)
@@ -1409,9 +1406,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
               onFavorite: () => toggleFavorite(dailyFact!),
               onTranslate: () => translateFact(dailyFact!),
             ),
-          const SizedBox(height: 24),
-          const SectionTitle(title: '隨機抽一則'),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
+          const SectionTitle(title: '抽一則✨'),
+          const SizedBox(height: 10),
           SizedBox(
             height: 52,
             child: FilledButton.icon(
@@ -1424,10 +1421,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
           ),
           if (isLoadingRandom) buildCatLoading('隨機冷知識抽取中...'),
           if (randomFact != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             CatFactCard(
               fact: randomFact!,
-              subtitle: '隨機抽到的 fact',
               translatedText: translatedFacts[randomFact!.id],
               isTranslating: translatingFactIds.contains(randomFact!.id),
               isFavorite: favoriteApiFactIds.contains(randomFact!.id),
@@ -1438,7 +1434,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
               onTranslate: () => translateFact(randomFact!),
             ),
           ],
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
           SectionTitle(
             title: '更多冷知識',
             trailing: TextButton.icon(
@@ -1453,7 +1449,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
           for (final fact in factList)
             CatFactCard(
               fact: fact,
-              subtitle: 'Cat Facts API',
               translatedText: translatedFacts[fact.id],
               isTranslating: translatingFactIds.contains(fact.id),
               isFavorite: favoriteApiFactIds.contains(fact.id),
@@ -1580,7 +1575,10 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
         ((source == 'user' && createdBy == currentUserId) || source == 'ai');
 
     try {
-      await supabase.from('cat_fact_favorites').delete().eq('id', favorite['id']);
+      await supabase
+          .from('cat_fact_favorites')
+          .delete()
+          .eq('id', favorite['id']);
 
       if (shouldDeleteFact) {
         await supabase.from('cat_facts').delete().eq('id', factId);
@@ -1724,7 +1722,8 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
             return AlertDialog(
               title: const Text('編輯我的冷知識'),
               content: SingleChildScrollView(
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width * 0.82,
@@ -1775,7 +1774,8 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                           if (value == null) return;
 
                           if (value == '__add_category__') {
-                            final newCategory = await showEditAddCategoryDialog();
+                            final newCategory =
+                                await showEditAddCategoryDialog();
                             if (newCategory == null || newCategory.isEmpty) {
                               return;
                             }
@@ -1842,7 +1842,6 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       },
     );
 
-
     if (result == null) return;
 
     try {
@@ -1868,8 +1867,6 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       ).showSnackBar(SnackBar(content: Text('更新失敗：$e')));
     }
   }
-
-  
 
   Future<void> translateFavorite(String favoriteId, String text) async {
     if (translatedFavorites.containsKey(favoriteId)) {
@@ -1914,8 +1911,6 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       ).showSnackBar(SnackBar(content: Text('翻譯失敗：$e')));
     }
   }
-
-  
 
   @override
   Widget build(BuildContext context) {
@@ -2091,7 +2086,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                                 translatedText == null
                                     ? isTranslating
                                           ? '翻譯中...'
-                                          : '翻譯成繁體中文'
+                                          : '翻譯'
                                     : '已翻譯',
                               ),
                             ),
@@ -2564,7 +2559,8 @@ class _CatAiPageState extends State<CatAiPage> {
     });
 
     try {
-      final apiFactId = 'ai-${user.id}-${DateTime.now().millisecondsSinceEpoch}';
+      final apiFactId =
+          'ai-${user.id}-${DateTime.now().millisecondsSinceEpoch}';
       final factPayload = {
         'api_fact_id': apiFactId,
         'text': answer,
@@ -2648,8 +2644,6 @@ class _CatAiPageState extends State<CatAiPage> {
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
-
-  
 
   @override
   Widget build(BuildContext context) {
@@ -3248,7 +3242,7 @@ class _AddFactPageState extends State<AddFactPage> {
 class SectionTitle extends StatelessWidget {
   const SectionTitle({super.key, required this.title, this.trailing});
 
-  final String title;
+  final String? title;
   final Widget? trailing;
 
   @override
@@ -3257,7 +3251,7 @@ class SectionTitle extends StatelessWidget {
       children: [
         Expanded(
           child: Text(
-            title,
+            title ?? '',
             style: Theme.of(
               context,
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
@@ -3273,7 +3267,7 @@ class CatFactCard extends StatelessWidget {
   const CatFactCard({
     super.key,
     required this.fact,
-    required this.subtitle,
+    this.subtitle,
     required this.onFavorite,
     required this.onCopy,
     required this.onTranslate,
@@ -3285,7 +3279,7 @@ class CatFactCard extends StatelessWidget {
   });
 
   final CatFact fact;
-  final String subtitle;
+  final String? subtitle;
   final VoidCallback onFavorite;
   final VoidCallback onCopy;
   final VoidCallback onTranslate;
@@ -3319,16 +3313,19 @@ class CatFactCard extends StatelessWidget {
                     backgroundColor: Colors.white,
                     child: Icon(Icons.pets, color: Colors.orange.shade700),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: Colors.orange.shade900,
+                  if (isFavorite && favoriteCategory != null) ...[
+                    const SizedBox(width: 10),
+                    Chip(
+                      label: Text(favoriteCategory!),
+                      backgroundColor: Colors.white.withAlpha(160),
+                      side: BorderSide(color: Colors.brown.shade200),
+                      labelStyle: TextStyle(
+                        color: Colors.brown.shade700,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ),
+                  ],
+                  const Spacer(),
                   IconButton(
                     onPressed: onCopy,
                     icon: const Icon(Icons.copy_outlined),
@@ -3380,15 +3377,6 @@ class CatFactCard extends StatelessWidget {
                           : '已翻譯',
                     ),
                   ),
-                  if (isFavorite && favoriteCategory != null)
-                    Chip(
-                      label: Text(favoriteCategory!),
-                      backgroundColor: Colors.orange.shade100,
-                      labelStyle: TextStyle(
-                        color: Colors.orange.shade900,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                 ],
               ),
               if (translatedText != null) ...[
