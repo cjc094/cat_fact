@@ -1673,6 +1673,44 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
       selectedEditCategory,
     }.where((item) => item != '全部' && item.isNotEmpty).toList();
 
+    Future<String?> showEditAddCategoryDialog() async {
+      final controller = TextEditingController();
+
+      final result = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('新增分類'),
+            content: TextField(
+              controller: controller,
+              autofocus: false,
+              decoration: const InputDecoration(
+                labelText: '分類名稱',
+                hintText: '例如：飲食、睡眠、品種',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final text = controller.text.trim();
+                  if (text.isEmpty) return;
+                  Navigator.pop(context, text);
+                },
+                child: const Text('新增'),
+              ),
+            ],
+          );
+        },
+      );
+
+      return result;
+    }
+
     if (factId == null || factId.isEmpty) {
       textController.dispose();
       return;
@@ -1712,19 +1750,62 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
                           labelText: '分類',
                           border: OutlineInputBorder(),
                         ),
-                        items: editCategories
-                            .map(
-                              (item) => DropdownMenuItem(
-                                value: item,
-                                child: Text(
-                                  item,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                        items: [
+                          ...editCategories.map(
+                            (item) => DropdownMenuItem(
+                              value: item,
+                              child: Text(
+                                item,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
+                            ),
+                          ),
+                          const DropdownMenuItem(
+                            value: '__add_category__',
+                            child: Row(
+                              children: [
+                                Icon(Icons.add, size: 18),
+                                SizedBox(width: 8),
+                                Text('新增分類'),
+                              ],
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) async {
                           if (value == null) return;
+
+                          if (value == '__add_category__') {
+                            final newCategory = await showEditAddCategoryDialog();
+                            if (newCategory == null || newCategory.isEmpty) {
+                              return;
+                            }
+
+                            try {
+                              await saveUserCategoryToSupabase(newCategory);
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('分類儲存失敗：$e')),
+                              );
+                              return;
+                            }
+
+                            if (!editCategories.contains(newCategory)) {
+                              editCategories.add(newCategory);
+                            }
+
+                            if (!availableCategories.contains(newCategory)) {
+                              setState(() {
+                                availableCategories.add(newCategory);
+                              });
+                            }
+
+                            setDialogState(() {
+                              selectedEditCategory = newCategory;
+                            });
+                            return;
+                          }
+
                           setDialogState(() {
                             selectedEditCategory = value;
                           });
