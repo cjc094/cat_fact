@@ -29,6 +29,8 @@ const catWalkingLottieAsset = 'assets/lottie/cat_walking.json';
 const catTypingLottieAsset = 'assets/lottie/cat_typing.json';
 const catEmptyLottieAsset = 'assets/lottie/cat_empty.json';
 const heartLottieAsset = 'assets/lottie/heart.json';
+const refreshLoadingLottieUrl =
+    'https://lottie.host/5993fc9a-c3bc-490d-b48b-5a497135d590/vF8JGXV5H1.json';
 
 Widget buildLottieAsset(
   String asset, {
@@ -40,6 +42,31 @@ Widget buildLottieAsset(
 }) {
   return Lottie.asset(
     asset,
+    width: width,
+    height: height,
+    fit: fit,
+    repeat: repeat,
+    errorBuilder: (context, error, stackTrace) {
+      return fallback ??
+          Icon(
+            Icons.pets,
+            size: width == null ? 72 : width * 0.48,
+            color: Colors.orangeAccent,
+          );
+    },
+  );
+}
+
+Widget buildLottieNetwork(
+  String url, {
+  double? width,
+  double? height,
+  BoxFit fit = BoxFit.contain,
+  bool repeat = true,
+  Widget? fallback,
+}) {
+  return Lottie.network(
+    url,
     width: width,
     height: height,
     fit: fit,
@@ -1295,8 +1322,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            buildLottieAsset(
-              catTypingLottieAsset,
+            buildLottieNetwork(
+              refreshLoadingLottieUrl,
               width: 120,
               height: 120,
               fallback: const CircularProgressIndicator(),
@@ -1385,6 +1412,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
+      color: Colors.transparent,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      displacement: 74,
       onRefresh: () async {
         await loadRandomList();
       },
@@ -1439,25 +1470,25 @@ class _DiscoverPageState extends State<DiscoverPage> {
             title: '更多冷知識',
             trailing: TextButton.icon(
               onPressed: isLoadingList ? null : loadRandomList,
-              icon: isLoadingList
-                  ? const Icon(Icons.pets)
-                  : const Icon(Icons.refresh),
-              label: Text(isLoadingList ? '更新中...' : '換一批'),
+              icon: const Icon(Icons.refresh),
+              label: const Text('換一批'),
             ),
           ),
-          if (isLoadingList && factList.isEmpty) buildCatLoading('更多冷知識更新中...'),
-          for (final fact in factList)
-            CatFactCard(
-              fact: fact,
-              translatedText: translatedFacts[fact.id],
-              isTranslating: translatingFactIds.contains(fact.id),
-              isFavorite: favoriteApiFactIds.contains(fact.id),
-              favoriteCategory: favoriteApiFactCategories[fact.id],
-              isSavingFavorite: savingFavoriteFactIds.contains(fact.id),
-              onCopy: () => copyFact(fact),
-              onFavorite: () => toggleFavorite(fact),
-              onTranslate: () => translateFact(fact),
-            ),
+          if (isLoadingList)
+            buildCatLoading('更多冷知識更新中...')
+          else
+            for (final fact in factList)
+              CatFactCard(
+                fact: fact,
+                translatedText: translatedFacts[fact.id],
+                isTranslating: translatingFactIds.contains(fact.id),
+                isFavorite: favoriteApiFactIds.contains(fact.id),
+                favoriteCategory: favoriteApiFactCategories[fact.id],
+                isSavingFavorite: savingFavoriteFactIds.contains(fact.id),
+                onCopy: () => copyFact(fact),
+                onFavorite: () => toggleFavorite(fact),
+                onTranslate: () => translateFact(fact),
+              ),
         ],
       ),
     );
@@ -1481,6 +1512,43 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
   void initState() {
     super.initState();
     loadCategories();
+  }
+
+  Widget buildFavoriteLoading() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            buildLottieNetwork(
+              refreshLoadingLottieUrl,
+              width: 150,
+              height: 150,
+              fallback: buildLottieAsset(
+                catTypingLottieAsset,
+                width: 150,
+                height: 150,
+                fallback: Icon(
+                  Icons.favorite_border,
+                  size: 72,
+                  color: Colors.orange.shade300,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '收藏讀取中...',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange.shade900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> loadCategories() async {
@@ -1947,7 +2015,7 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
             future: fetchFavorites(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
+                return buildFavoriteLoading();
               }
 
               if (snapshot.hasError) {
@@ -2001,6 +2069,10 @@ class _FavoriteFactsPageState extends State<FavoriteFactsPage> {
               }
 
               return RefreshIndicator(
+                color: Colors.transparent,
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                displacement: 74,
                 onRefresh: () async => setState(() {}),
                 child: ListView.builder(
                   padding: const EdgeInsets.all(16),
@@ -2616,21 +2688,35 @@ class _CatAiPageState extends State<CatAiPage> {
   }
 
   Widget buildCatAiLoading() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      child: Center(
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            buildLottieAsset(
-              catTypingLottieAsset,
-              width: 160,
-              height: 160,
-              fallback: const CircularProgressIndicator(),
+            buildLottieNetwork(
+              refreshLoadingLottieUrl,
+              width: 150,
+              height: 150,
+              fallback: buildLottieAsset(
+                catTypingLottieAsset,
+                width: 150,
+                height: 150,
+                fallback: const Icon(
+                  Icons.pets,
+                  size: 72,
+                  color: Colors.orangeAccent,
+                ),
+              ),
             ),
-            const SizedBox(height: 8),
-            const Text(
+            const SizedBox(height: 10),
+            Text(
               '喵博士正在思考中...',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange.shade900,
+              ),
             ),
           ],
         ),
@@ -3080,6 +3166,43 @@ class _AddFactPageState extends State<AddFactPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Widget buildAddFactLoading() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            buildLottieNetwork(
+              refreshLoadingLottieUrl,
+              width: 120,
+              height: 120,
+              fallback: buildLottieAsset(
+                catTypingLottieAsset,
+                width: 120,
+                height: 120,
+                fallback: Icon(
+                  Icons.edit_note,
+                  size: 64,
+                  color: Colors.orange.shade300,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '冷知識新增中...',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange.shade900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -3219,21 +3342,11 @@ class _AddFactPageState extends State<AddFactPage> {
           height: 52,
           child: FilledButton.icon(
             onPressed: isLoading ? null : addFact,
-            icon: isLoading ? const Icon(Icons.pets) : const Icon(Icons.send),
-            label: Text(isLoading ? '新增中...' : '新增冷知識'),
+            icon: const Icon(Icons.send),
+            label: const Text('新增冷知識'),
           ),
         ),
-        if (isLoading) ...[
-          const SizedBox(height: 16),
-          Center(
-            child: buildLottieAsset(
-              catTypingLottieAsset,
-              width: 120,
-              height: 120,
-              fallback: const CircularProgressIndicator(),
-            ),
-          ),
-        ],
+        if (isLoading) buildAddFactLoading(),
       ],
     );
   }
